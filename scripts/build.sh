@@ -18,8 +18,17 @@ cp "$BIN" "$APP/Contents/MacOS/QuickUse"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/StatusIcon.svg Resources/AppIcon.icns "$APP/Contents/Resources/"
 
-# 本地自签名。注意：每次重新签名后，系统可能会重新询问定位、自动化、钥匙串权限。
-codesign --force --sign - --identifier com.austen.quickuse "$APP"
+# 签名身份决定系统是否“认得”这个 App：定位、通知、自动化权限和钥匙串授权都绑定在签名上。
+# 用固定的证书签名，重新编译后这些授权仍然有效；临时签名（ad-hoc）每次编译都会变，系统会重新询问。
+# 优先用环境变量 QUICKUSE_SIGN_IDENTITY，其次本机第一个 Apple Development 证书，都没有则用临时签名。
+IDENTITY="${QUICKUSE_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null | awk -F'"' '/Apple Development/{print $2; exit}')}"
+if [[ -n "$IDENTITY" ]]; then
+  codesign --force --sign "$IDENTITY" --identifier com.austen.quickuse "$APP"
+  echo "签名：$IDENTITY"
+else
+  codesign --force --sign - --identifier com.austen.quickuse "$APP"
+  echo "签名：临时签名（ad-hoc），重新编译后系统可能会再次询问权限"
+fi
 echo "已生成 $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
