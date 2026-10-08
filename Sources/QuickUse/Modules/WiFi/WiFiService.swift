@@ -1,6 +1,7 @@
 import AppKit
 import CoreLocation
 import CoreWLAN
+import Security
 import Foundation
 
 /// CoreWLAN 的封装。连接和扫描是阻塞调用，在后台线程执行。
@@ -31,8 +32,16 @@ enum WiFiService {
         }.value
     }
 
+    /// 连接时实际用到的凭据。来自系统钥匙串时由调用方缓存，下次直接使用。
+    struct Credential: Sendable {
+        var username: String?
+        var password: String
+    }
+
+    /// 连接网络。返回从系统钥匙串新读到的凭据（没有则为 nil）。
+    @discardableResult
     static func connect(ssid: String, security: WiFiPreset.Security,
-                        username: String?, password: String?) async throws {
+                        username: String?, password: String?) async throws -> Credential? {
         try await Task.detached {
             guard let iface = interface else {
                 throw ConnectError(title: "找不到 Wi‑Fi 硬件", detail: "这台 Mac 没有可用的无线网卡。")
@@ -53,33 +62,72 @@ enum WiFiService {
 
             let isEnterprise = [CWSecurity.wpaEnterprise, .wpa2Enterprise, .wpa3Enterprise, .enterprise]
                 .contains { network.supportsSecurity($0) }
-            do {
+
+            func associate(_ username: String?, _ password: String?) throws {
                 if isEnterprise {
-                    // 用户名、密码为 nil 时，系统会使用之前保存的企业网络凭据。
                     try iface.associate(toEnterpriseNetwork: network, identity: nil,
                                         username: username?.nilIfEmpty, password: password?.nilIfEmpty)
                 } else {
                     try iface.associate(to: network, password: password?.nilIfEmpty)
                 }
+            }
+
+            do {
+                try associate(username, password)
+                return nil
             } catch {
-                // CoreWLAN 有时拿不到系统保存的密码，退回 networksetup 再试一次。
-                if !isEnterprise, try fallbackJoin(ssid: ssid, password: password) { return }
-                throw ConnectError(title: "连接「\(ssid)」失败", detail: describe(error, enterprise: isEnterprise))
+                // 新版 macOS 不会把系统保存的密码自动交给第三方 App。
+                // “使用系统已保存的密码”的预设，去系统钥匙串读出凭据后重试（首次会弹出钥匙串授权）。
+                guard security == .system else {
+                    throw ConnectError(title: "连接「\(ssid)」失败", detail: describe(error, enterprise: isEnterprise))
+                }
+                guard let saved = systemCredential(ssid: ssid, enterprise: isEnterprise) else {
+                    throw ConnectError(title: "连接「\(ssid)」失败",
+                                       detail: "没能读取系统保存的密码（可能在钥匙串授权时点了拒绝）。可以在设置里编辑这个预设，改为手动填写密码。")
+                }
+                do {
+                    try associate(saved.username, saved.password)
+                    return saved
+                } catch {
+                    throw ConnectError(title: "连接「\(ssid)」失败", detail: describe(error, enterprise: isEnterprise))
+                }
             }
         }.value
     }
 
-    private static func fallbackJoin(ssid: String, password: String?) throws -> Bool {
-        var args = ["-setairportnetwork", interfaceName, ssid]
-        if let password, !password.isEmpty { args.append(password) }
-        let result = Shell.run("/usr/sbin/networksetup", args)
-        let output = result.output.lowercased()
-        return result.status == 0 && !output.contains("could not") && !output.contains("failed") && !output.contains("error")
+    /// 读取系统为这个网络保存的凭据。
+    /// - 个人网络：系统钥匙串里的 “AirPort network password”，读取时系统会要求管理员授权。
+    /// - 企业网络：登录钥匙串里的 802.1X 凭据，读取时系统会询问是否允许 QuickUse 访问。
+    private static func systemCredential(ssid: String, enterprise: Bool) -> Credential? {
+        if enterprise {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: "com.apple.network.eap.user.item.wlan.ssid.\(ssid)",
+                kSecReturnAttributes as String: true,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var result: AnyObject?
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+                  let item = result as? [String: Any],
+                  let data = item[kSecValueData as String] as? Data,
+                  let password = String(data: data, encoding: .utf8) else { return nil }
+            return Credential(username: item[kSecAttrAccount as String] as? String, password: password)
+        }
+        let result = Shell.run("/usr/bin/security", [
+            "find-generic-password", "-D", "AirPort network password", "-a", ssid, "-w",
+            "/Library/Keychains/System.keychain",
+        ])
+        let password = result.output.trimmingCharacters(in: .newlines)
+        guard result.status == 0, !password.isEmpty else { return nil }
+        return Credential(username: nil, password: password)
     }
 
     private static func describe(_ error: Error, enterprise: Bool) -> String {
         let code = (error as NSError).code
         switch code {
+        case -3900:
+            return "系统拒绝了这次连接（tmpErr）。通常是没有拿到正确的密码，请在设置里检查这个预设。"
         case -3924, -3905:
             return enterprise ? "用户名或密码不正确，或认证超时。" : "密码不正确。"
         case -3903:

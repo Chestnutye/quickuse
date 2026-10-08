@@ -85,12 +85,19 @@ final class WiFiModule: Module {
         connectingID = preset.id
         context.refreshMenu()
 
-        let password: String? = (preset.security == .personal || preset.security == .enterprise) ? preset.password : nil
-        let username = preset.security == .enterprise ? preset.username : nil
+        // “使用系统已保存的密码”的预设也可能已缓存了从系统钥匙串读到的凭据。
+        let password: String? = preset.security == .open ? nil : preset.password
+        let username = preset.security == .enterprise || preset.security == .system ? preset.username : nil
         Task { @MainActor in
             do {
-                try await WiFiService.connect(ssid: preset.ssid, security: preset.security,
-                                              username: username, password: password)
+                if let learned = try await WiFiService.connect(ssid: preset.ssid, security: preset.security,
+                                                               username: username, password: password) {
+                    preset.password = learned.password
+                    if let u = learned.username, var p = store.presets.first(where: { $0.id == preset.id }) {
+                        p.username = u
+                        store.upsert(p)
+                    }
+                }
                 Notifier.post(.wifi, title: "已连接到 \(preset.displayName)", body: preset.ssid)
             } catch let error as WiFiService.ConnectError {
                 Notifier.post(.wifi, title: error.title, body: error.detail, isError: true)
