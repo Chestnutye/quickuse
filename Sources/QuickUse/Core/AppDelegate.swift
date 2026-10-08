@@ -1,0 +1,51 @@
+import AppKit
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private var statusItem: NSStatusItem!
+    private let menu = NSMenu()
+    private var modules: [Module] = []
+    /// 所有模块 start 完成前忽略刷新请求，避免访问尚未初始化的模块。
+    private var ready = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = StatusIcon.image()
+        statusItem.button?.toolTip = "QuickUse"
+        menu.delegate = self
+        menu.autoenablesItems = false
+        statusItem.menu = menu
+
+        let services = AppServices.shared
+        modules = ModuleRegistry.makeAll()
+        services.register(modules)
+        for module in modules {
+            module.start(context: ModuleContext(moduleID: module.id, events: services.events) { [weak self] in
+                self?.rebuild()
+            })
+        }
+        ready = true
+        rebuild()
+        // 开发用：open QuickUse.app --args --settings 启动后直接打开设置窗口。
+        if CommandLine.arguments.contains("--settings") { services.openSettings() }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        modules.forEach { $0.menuWillOpen() }
+        rebuild()
+    }
+
+    private func rebuild() {
+        guard ready else { return }
+        menu.removeAllItems()
+        for module in modules {
+            let items = module.menuItems()
+            guard !items.isEmpty else { continue }
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
+            items.forEach(menu.addItem)
+        }
+        menu.addItem(.separator())
+        menu.addItem(ActionMenuItem("设置…", key: ",") { AppServices.shared.openSettings() })
+        menu.addItem(ActionMenuItem("退出 QuickUse", key: "q") { NSApp.terminate(nil) })
+    }
+}

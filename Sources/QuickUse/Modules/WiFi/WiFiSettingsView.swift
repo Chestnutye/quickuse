@@ -1,0 +1,214 @@
+import SwiftUI
+
+struct WiFiSettingsView: View {
+    @ObservedObject var store: WiFiPresetStore
+    let connect: (WiFiPreset) -> Void
+    @State private var editing: WiFiPreset?
+    @State private var isNew = false
+
+    var body: some View {
+        Form {
+            if store.presets.isEmpty {
+                Section {
+                    Text("还没有预设。添加常用网络，按“家”“学校”等分组，之后在菜单里点一下即可切换。")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ForEach(store.groups, id: \.self) { group in
+                Section(group) {
+                    ForEach(store.presets.filter { $0.group == group }) { preset in
+                        PresetRow(preset: preset,
+                                  onEdit: { isNew = false; editing = preset },
+                                  onConnect: { connect(preset) },
+                                  onDelete: { store.delete(preset) },
+                                  onMove: { move(preset, by: $0) })
+                    }
+                }
+            }
+            Section {
+                Button {
+                    isNew = true
+                    editing = WiFiPreset(group: store.groups.first ?? "家", name: "", ssid: "", security: .system)
+                } label: { Label("添加预设", systemImage: "plus") }
+            }
+        }
+        .formStyle(.grouped)
+        .sheet(item: $editing) { preset in
+            PresetEditor(preset: preset, isNew: isNew, groups: store.groups) { saved, password in
+                if let password { saved.password = password }
+                store.upsert(saved)
+                editing = nil
+            } onCancel: { editing = nil }
+        }
+    }
+
+    /// 在同组内上下移动。
+    private func move(_ preset: WiFiPreset, by offset: Int) {
+        let sameGroup = store.presets.indices.filter { store.presets[$0].group == preset.group }
+        guard let pos = sameGroup.firstIndex(where: { store.presets[$0].id == preset.id }),
+              sameGroup.indices.contains(pos + offset) else { return }
+        store.presets.swapAt(sameGroup[pos], sameGroup[pos + offset])
+    }
+}
+
+private struct PresetRow: View {
+    let preset: WiFiPreset
+    let onEdit: () -> Void
+    let onConnect: () -> Void
+    let onDelete: () -> Void
+    let onMove: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: preset.security == .enterprise ? "person.badge.key" : preset.hidden ? "eye.slash" : "wifi")
+                .frame(width: 20).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(preset.name)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("连接", action: onConnect).controlSize(.small)
+            Menu {
+                Button("编辑…", action: onEdit)
+                Button("上移") { onMove(-1) }
+                Button("下移") { onMove(1) }
+                Divider()
+                Button("删除", role: .destructive, action: onDelete)
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton).fixedSize()
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onEdit)
+    }
+
+    private var subtitle: String {
+        var parts = [preset.ssid, preset.security.label]
+        if preset.hidden { parts.append("隐藏网络") }
+        if preset.security == .enterprise, let u = preset.username, !u.isEmpty { parts.append(u) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct PresetEditor: View {
+    enum Source: String { case saved, manual }
+
+    @State var preset: WiFiPreset
+    let isNew: Bool
+    let groups: [String]
+    let onSave: (WiFiPreset, String?) -> Void
+    let onCancel: () -> Void
+
+    @State private var source: Source = .saved
+    @State private var savedNetworks: [String] = []
+    @State private var loading = true
+    @State private var search = ""
+    @State private var password = ""
+    @State private var username = ""
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Picker("来源", selection: $source) {
+                        Text("从连过的网络选").tag(Source.saved)
+                        Text("手动输入").tag(Source.manual)
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: source) { _, new in
+                        preset.security = new == .saved ? .system : (preset.security == .system ? .personal : preset.security)
+                    }
+                }
+
+                if source == .saved {
+                    Section {
+                        TextField("搜索", text: $search, prompt: Text("搜索 \(savedNetworks.count) 个连过的网络"))
+                        if loading {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            List(filtered, id: \.self, selection: Binding(
+                                get: { preset.ssid.isEmpty ? nil : preset.ssid },
+                                set: { pick($0 ?? "") })) { ssid in
+                                Text(ssid).tag(ssid)
+                            }
+                            .frame(height: 150)
+                        }
+                        if !preset.ssid.isEmpty {
+                            Label("已选择 \(preset.ssid)，使用系统已保存的密码，不用再填", systemImage: "checkmark.seal")
+                                .foregroundStyle(.green).font(.callout)
+                        }
+                    }
+                } else {
+                    Section {
+                        TextField("网络名称（SSID）", text: $preset.ssid)
+                        Picker("安全性", selection: $preset.security) {
+                            ForEach([WiFiPreset.Security.personal, .enterprise, .open], id: \.self) {
+                                Text($0.label).tag($0)
+                            }
+                        }
+                        if preset.security == .enterprise {
+                            TextField("用户名", text: $username, prompt: Text("例如 s123456@univ.edu"))
+                        }
+                        if preset.security == .personal || preset.security == .enterprise {
+                            SecureField("密码", text: $password, prompt: Text(isNew ? "" : "留空则不修改"))
+                        }
+                        Toggle("这是隐藏网络（不广播名称）", isOn: $preset.hidden)
+                    }
+                }
+
+                Section {
+                    LabeledContent("分组") {
+                        HStack(spacing: 4) {
+                            TextField("", text: $preset.group, prompt: Text("家 / 学校")).labelsHidden()
+                            if !groups.isEmpty {
+                                Menu {
+                                    ForEach(groups, id: \.self) { g in Button(g) { preset.group = g } }
+                                } label: { Image(systemName: "chevron.down") }
+                                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                            }
+                        }
+                    }
+                    TextField("名称", text: $preset.name, prompt: Text("例如 日常、实验室"))
+                }
+            }
+            .formStyle(.grouped)
+            Divider()
+            HStack {
+                Spacer()
+                Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
+                Button(isNew ? "添加" : "保存", action: save)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(preset.ssid.trimmingCharacters(in: .whitespaces).isEmpty
+                              || preset.group.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(12)
+        }
+        .frame(width: 480, height: 560)
+        .task {
+            if preset.security != .system { source = .manual }
+            username = preset.username ?? ""
+            savedNetworks = await WiFiService.savedNetworks()
+            loading = false
+        }
+    }
+
+    private var filtered: [String] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        return q.isEmpty ? savedNetworks : savedNetworks.filter { $0.localizedCaseInsensitiveContains(q) }
+    }
+
+    private func pick(_ ssid: String) {
+        preset.ssid = ssid
+        if preset.name.isEmpty { preset.name = ssid }
+    }
+
+    private func save() {
+        var p = preset
+        p.ssid = p.ssid.trimmingCharacters(in: .whitespaces)
+        p.group = p.group.trimmingCharacters(in: .whitespaces)
+        if p.name.trimmingCharacters(in: .whitespaces).isEmpty { p.name = p.ssid }
+        p.username = p.security == .enterprise ? username : nil
+        let usesPassword = p.security == .personal || p.security == .enterprise
+        if !usesPassword { p.password = nil }
+        onSave(p, usesPassword && !password.isEmpty ? password : nil)
+    }
+}

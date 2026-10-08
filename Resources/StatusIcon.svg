@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18">
+  <!-- 字母 Q：右下角开口的圆环 + 闪电作为 Q 的尾巴 -->
+  <path d="M9.06 14.01A6.1 6.1 0 1 1 14.01 9.06" fill="none" stroke="#000" stroke-width="1.8" stroke-linecap="round"/>
+  <path fill="#000" d="M10.35 9.58 L11.87 15.69 L13.59 13.97 L16.07 17.60 L14.74 10.92 L13.02 12.64Z"/>
+</svg>
