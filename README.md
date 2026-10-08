@@ -48,6 +48,17 @@ scripts/build.sh --install   # 编译并安装到 /Applications，设为登录�
 | 定位服务 | macOS 只允许有定位权限的 App 读取 Wi‑Fi 名称。QuickUse 不获取位置，也不在后台轮询，只在网络变化和打开菜单时读取一次 |
 | 通知 | 显示 Wi‑Fi 切换和自动化结果 |
 | 自动化 → System Events | 修改菜单栏自动隐藏设置 |
+| 登录时启动（可选） | 开机后自动运行 |
+
+缺少必需权限时，App 启动后会自动打开 **设置 → 权限** 页：没询问过的权限点一下弹出系统授权框，被拒绝的直接跳到系统设置对应位置，切回来状态自动刷新。
+
+### Wi‑Fi 密码
+
+macOS 不会把系统保存的 Wi‑Fi 密码自动交给第三方 App，所以：
+
+- **个人网络**（WPA2/WPA3 个人）：添加预设时弹出一次系统授权，读取这一个网络的密码。由 QuickUse 进程自己读取，即使选了“始终允许”也只对 QuickUse 放行。
+- **企业网络**（eduroam 等）：不读取系统密码，只自动填入账号名，密码由你填写一次。
+- 密码只保存在本机钥匙串中 QuickUse 自己的条目里，名称以 `QuickUse` 开头。
 
 > [!NOTE]
 > 本地编译使用临时签名（ad-hoc），每次重新编译后系统可能会再次询问上述权限。
@@ -70,6 +81,7 @@ scripts/build.sh --install   # 编译并安装到 /Applications，设为登录�
 Sources/QuickUse/
 ├── Core/                  框架层
 │   ├── Automation/        自动化引擎、规则编辑器
+│   ├── Permissions/       权限检查页
 │   ├── Settings/          设置窗口、通用设置
 │   ├── AppDelegate.swift  菜单栏图标与菜单组装
 │   ├── Module.swift       模块协议
@@ -108,6 +120,9 @@ final class CaffeineModule: Module {
     // 提供给自动化的触发条件和动作，规则编辑器会自动出现对应选项
     func automationTriggers() -> [TriggerDefinition] { … }
     func automationActions() -> [ActionDefinition] { … }
+
+    // 需要的系统权限，会出现在 设置 → 权限 页；必需权限缺失时启动后自动打开该页
+    func permissions() -> [PermissionItem] { … }
 }
 ```
 
@@ -123,6 +138,7 @@ final class CaffeineModule: Module {
 | `Notifier.post(_:title:body:)` | 发送通知（新的类别加在 `Notifier.Category`） |
 | `Shell.run` / `Shell.appleScript` | 调用命令行或 AppleScript |
 | `ParamSpec` | 描述动作和触发条件的参数，规则编辑器据此生成输入控件 |
+| `Permissions.*Item` | 现成的权限声明：定位、通知、控制某个 App（Apple 事件）、登录项；也可以自定义 `PermissionItem` |
 
 ## 图标
 
