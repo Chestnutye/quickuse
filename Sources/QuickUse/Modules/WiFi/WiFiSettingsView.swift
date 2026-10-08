@@ -5,6 +5,7 @@ struct WiFiSettingsView: View {
     let connect: (WiFiPreset) -> Void
     @State private var editing: WiFiPreset?
     @State private var isNew = false
+    @State private var editorNote: String?
 
     var body: some View {
         Form {
@@ -20,7 +21,7 @@ struct WiFiSettingsView: View {
                         PresetRow(preset: preset,
                                   needsAuthorization: preset.security == .system && !preset.hasPassword,
                                   onAuthorize: { authorize(preset) },
-                                  onEdit: { isNew = false; editing = preset },
+                                  onEdit: { isNew = false; editorNote = nil; editing = preset },
                                   onConnect: { connect(preset) },
                                   onDelete: { store.delete(preset) },
                                   onMove: { move(preset, by: $0) })
@@ -30,13 +31,14 @@ struct WiFiSettingsView: View {
             Section {
                 Button {
                     isNew = true
+                    editorNote = nil
                     editing = WiFiPreset(group: store.groups.first ?? "家", name: "", ssid: "", security: .system)
                 } label: { Label("添加预设", systemImage: "plus") }
             }
         }
         .formStyle(.grouped)
         .sheet(item: $editing) { preset in
-            PresetEditor(preset: preset, isNew: isNew, groups: store.groups) { saved, password in
+            PresetEditor(preset: preset, isNew: isNew, groups: store.groups, initialNote: editorNote) { saved, password in
                 if let password { saved.password = password }
                 store.upsert(saved)
                 editing = nil
@@ -44,15 +46,24 @@ struct WiFiSettingsView: View {
         }
     }
 
-    /// 为“使用系统已保存的密码”的预设补做授权：读取系统密码并缓存。
+    /// 为“使用系统已保存的密码”的预设补做授权。
+    /// 个人网络：读取系统密码并缓存。企业网络：不读系统密码，打开编辑框请用户填写一次。
     private func authorize(_ preset: WiFiPreset) {
         Task {
-            guard let credential = await WiFiService.savedCredential(ssid: preset.ssid) else { return }
-            preset.password = credential.password
-            var p = preset
-            p.username = credential.username
-            store.upsert(p)
-            store.objectWillChange.send()
+            switch await WiFiService.lookupSaved(ssid: preset.ssid) {
+            case .personal(let credential):
+                preset.password = credential.password
+                store.objectWillChange.send()
+            case .enterprise(let username):
+                var p = preset
+                p.security = .enterprise
+                p.username = username
+                isNew = false
+                editorNote = PresetEditor.enterpriseNote(p.ssid)
+                editing = p
+            case .unavailable:
+                break
+            }
         }
     }
 
@@ -115,6 +126,7 @@ private struct PresetEditor: View {
     @State var preset: WiFiPreset
     let isNew: Bool
     let groups: [String]
+    var initialNote: String?
     let onSave: (WiFiPreset, String?) -> Void
     let onCancel: () -> Void
 
@@ -128,6 +140,11 @@ private struct PresetEditor: View {
     @State private var authorizing = false
     /// 读取系统密码被拒绝时，暂存待保存的预设，让用户选择“仍然保存”或“重试”。
     @State private var pendingWithoutPassword: WiFiPreset?
+    @State private var note: String?
+
+    static func enterpriseNote(_ ssid: String) -> String {
+        "「\(ssid)」是企业网络。系统不允许其他 App 读取它的密码，账号已自动填好，请填写一次密码。"
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,6 +180,9 @@ private struct PresetEditor: View {
                     }
                 } else {
                     Section {
+                        if let note {
+                            Label(note, systemImage: "info.circle").foregroundStyle(.blue).font(.callout)
+                        }
                         TextField("网络名称（SSID）", text: $preset.ssid)
                         Picker("安全性", selection: $preset.security) {
                             ForEach([WiFiPreset.Security.personal, .enterprise, .open], id: \.self) {
@@ -212,6 +232,7 @@ private struct PresetEditor: View {
                     .disabled(authorizing)
                     .keyboardShortcut(.defaultAction)
                     .disabled(preset.ssid.trimmingCharacters(in: .whitespaces).isEmpty
+                              || (source == .manual && preset.security == .enterprise && password.isEmpty && !preset.hasPassword)
                               || preset.group.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(12)
@@ -220,6 +241,7 @@ private struct PresetEditor: View {
         .task {
             if preset.security != .system { source = .manual }
             originalSSID = preset.ssid
+            note = initialNote
             username = preset.username ?? ""
             savedNetworks = await WiFiService.savedNetworks()
             loading = false
@@ -248,12 +270,18 @@ private struct PresetEditor: View {
             authorizing = true
             pendingWithoutPassword = nil
             Task {
-                let credential = await WiFiService.savedCredential(ssid: p.ssid)
+                let lookup = await WiFiService.lookupSaved(ssid: p.ssid)
                 authorizing = false
-                if let credential {
-                    p.username = credential.username
+                switch lookup {
+                case .personal(let credential):
                     onSave(p, credential.password)
-                } else {
+                case .enterprise(let account):
+                    // 企业网络改为手动填写：账号已知，只差密码。
+                    preset.security = .enterprise
+                    username = account ?? ""
+                    source = .manual
+                    note = Self.enterpriseNote(p.ssid)
+                case .unavailable:
                     p.password = nil
                     pendingWithoutPassword = p
                 }

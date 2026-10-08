@@ -78,12 +78,16 @@ enum WiFiService {
             } catch {
                 // 新版 macOS 不会把系统保存的密码自动交给第三方 App。
                 // “使用系统已保存的密码”的预设，去系统钥匙串读出凭据后重试（首次会弹出钥匙串授权）。
-                guard security == .system else {
-                    throw ConnectError(title: "连接「\(ssid)」失败", detail: describe(error, enterprise: isEnterprise))
+                guard security == .system, !isEnterprise else {
+                    var detail = describe(error, enterprise: isEnterprise)
+                    if isEnterprise && password?.isEmpty != false {
+                        detail = "这是企业网络，需要在设置 → Wi‑Fi 预设里为它填写一次密码。"
+                    }
+                    throw ConnectError(title: "连接「\(ssid)」失败", detail: detail)
                 }
-                guard let saved = systemCredential(ssid: ssid, enterprise: isEnterprise) else {
+                guard let saved = personalCredential(ssid: ssid) else {
                     throw ConnectError(title: "连接「\(ssid)」失败",
-                                       detail: "没能读取系统保存的密码（可能在钥匙串授权时点了拒绝）。可以在设置里编辑这个预设，改为手动填写密码。")
+                                       detail: "没能读取系统保存的密码（可能在授权时点了拒绝）。可以在设置里编辑这个预设，改为手动填写密码。")
                 }
                 do {
                     try associate(saved.username, saved.password)
@@ -95,37 +99,53 @@ enum WiFiService {
         }.value
     }
 
-    /// 添加预设时调用：不知道是个人还是企业网络，两处都查一下（不存在的条目不会弹窗）。
-    /// 会触发系统的钥匙串授权弹窗，在后台线程执行。
-    static func savedCredential(ssid: String) async -> Credential? {
+    enum SavedLookup: Sendable {
+        /// 个人网络，已从系统钥匙串读到密码。
+        case personal(Credential)
+        /// 企业网络（eduroam 等）。系统不允许第三方 App 可靠地读取它的密码，只返回账号名，密码需用户填写。
+        case enterprise(username: String?)
+        /// 没读到（用户拒绝授权或系统里没有保存）。
+        case unavailable
+    }
+
+    /// 添加预设时调用。企业网络只读账号名（不读密码、不弹窗）；个人网络读取密码，会弹出一次系统授权。
+    static func lookupSaved(ssid: String) async -> SavedLookup {
         await Task.detached {
-            systemCredential(ssid: ssid, enterprise: true) ?? systemCredential(ssid: ssid, enterprise: false)
+            if let account = enterpriseAccount(ssid: ssid) { return .enterprise(username: account.isEmpty ? nil : account) }
+            if let credential = personalCredential(ssid: ssid) { return .personal(credential) }
+            return .unavailable
         }.value
     }
 
-    /// 读取系统为这个网络保存的凭据。由 QuickUse 进程自己读取，系统弹窗询问的对象是 QuickUse，
-    /// 所以即使选了“始终允许”，也只有 QuickUse 能读这一条，不会对其他程序放行。
-    /// - 个人网络：系统钥匙串里 service 为 “AirPort” 的条目，读取时需要管理员授权。
-    /// - 企业网络：登录钥匙串里的 802.1X 凭据。
-    private static func systemCredential(ssid: String, enterprise: Bool) -> Credential? {
-        var query: [String: Any] = [
+    /// 只读取企业网络凭据条目的属性（账号名），不读取密码，因此不会弹窗。条目不存在返回 nil。
+    private static func enterpriseAccount(ssid: String) -> String? {
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "com.apple.network.eap.user.item.wlan.ssid.\(ssid)",
             kSecReturnAttributes as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let item = result as? [String: Any] else { return nil }
+        return item[kSecAttrAccount as String] as? String ?? ""
+    }
+
+    /// 读取系统钥匙串里个人网络的密码（service 为 “AirPort”）。由 QuickUse 进程自己读取，
+    /// 弹窗询问的对象是 QuickUse，即使选了“始终允许”也不会对其他程序放行。
+    private static func personalCredential(ssid: String) -> Credential? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "AirPort",
+            kSecAttrAccount as String: ssid,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        if enterprise {
-            query[kSecAttrService as String] = "com.apple.network.eap.user.item.wlan.ssid.\(ssid)"
-        } else {
-            query[kSecAttrService as String] = "AirPort"
-            query[kSecAttrAccount as String] = ssid
-        }
         var result: AnyObject?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let item = result as? [String: Any],
-              let data = item[kSecValueData as String] as? Data,
+              let data = result as? Data,
               let password = String(data: data, encoding: .utf8), !password.isEmpty else { return nil }
-        return Credential(username: enterprise ? item[kSecAttrAccount as String] as? String : nil, password: password)
+        return Credential(username: nil, password: password)
     }
 
     private static func describe(_ error: Error, enterprise: Bool) -> String {
