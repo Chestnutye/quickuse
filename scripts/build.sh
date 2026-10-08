@@ -28,6 +28,10 @@ if [[ "${1:-}" == "--install" ]]; then
   while pgrep -x QuickUse >/dev/null; do sleep 0.2; done
   rm -rf /Applications/QuickUse.app
   cp -R "$APP" /Applications/
-  open /Applications/QuickUse.app --args --enable-login-item
+  # 进程退出后 LaunchServices 还需要片刻才能重新启动它，失败就稍等重试。
+  for i in 1 2 3 4 5; do
+    open /Applications/QuickUse.app --args --enable-login-item 2>/dev/null && break
+    sleep 1
+  done
   echo "已安装到 /Applications/QuickUse.app，已设为登录时启动"
 fi
