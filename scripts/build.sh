@@ -24,6 +24,8 @@ echo "已生成 $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
   pkill -x QuickUse 2>/dev/null || true
+  # 等旧进程完全退出，否则紧接着的 open 会失败（-600）。
+  while pgrep -x QuickUse >/dev/null; do sleep 0.2; done
   rm -rf /Applications/QuickUse.app
   cp -R "$APP" /Applications/
   open /Applications/QuickUse.app --args --enable-login-item

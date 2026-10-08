@@ -22,6 +22,8 @@ protocol Module: AnyObject {
     func settingsPanes() -> [SettingsPane]
     func automationTriggers() -> [TriggerDefinition]
     func automationActions() -> [ActionDefinition]
+    /// 本模块需要的系统权限，会出现在设置 → 权限 页。
+    func permissions() -> [PermissionItem]
 }
 
 extension Module {
@@ -31,6 +33,7 @@ extension Module {
     func settingsPanes() -> [SettingsPane] { [] }
     func automationTriggers() -> [TriggerDefinition] { [] }
     func automationActions() -> [ActionDefinition] { [] }
+    func permissions() -> [PermissionItem] { [] }
 }
 
 /// 主程序提供给模块的能力。

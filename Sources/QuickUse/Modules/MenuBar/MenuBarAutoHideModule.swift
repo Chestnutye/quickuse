@@ -63,6 +63,12 @@ final class MenuBarAutoHideModule: Module {
 
     func start(context: ModuleContext) { self.context = context }
 
+    func permissions() -> [PermissionItem] {
+        [Permissions.automationItem(appName: "System Events", bundleID: "com.apple.systemevents",
+                                    appPath: "/System/Library/CoreServices/System Events.app",
+                                    reason: "通过 System Events 修改菜单栏自动隐藏设置，改完立即生效。")]
+    }
+
     func menuItems() -> [NSMenuItem] {
         let current = MenuBarAutoHide.current()
         var items: [NSMenuItem] = [.header("自动隐藏菜单栏")]

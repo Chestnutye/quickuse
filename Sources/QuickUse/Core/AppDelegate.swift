@@ -27,6 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         ready = true
         rebuild()
+        // 有必需权限没开时，启动后自动打开权限页。
+        Task {
+            await services.permissions.refresh()
+            rebuild()
+            if !services.permissions.missingRequired.isEmpty { services.openSettings(pane: "permissions") }
+        }
         // 开发用：open QuickUse.app --args --settings 启动后直接打开设置窗口。
         if CommandLine.arguments.contains("--settings") { services.openSettings() }
         // 安装脚本用：open QuickUse.app --args --enable-login-item 注册为登录时启动。
@@ -38,11 +44,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         modules.forEach { $0.menuWillOpen() }
         rebuild()
+        Task { await AppServices.shared.permissions.refresh(); rebuild() }
     }
 
     private func rebuild() {
         guard ready else { return }
         menu.removeAllItems()
+        let missing = AppServices.shared.permissions.missingRequired.count
+        if missing > 0 {
+            menu.addItem(ActionMenuItem("有 \(missing) 项权限未开启…", image: "exclamationmark.triangle.fill") {
+                AppServices.shared.openSettings(pane: "permissions")
+            })
+            menu.addItem(.separator())
+        }
         for module in modules {
             let items = module.menuItems()
             guard !items.isEmpty else { continue }

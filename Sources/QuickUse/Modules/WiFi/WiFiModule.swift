@@ -35,8 +35,6 @@ final class WiFiModule: Module {
         self.context = context
         store = WiFiPresetStore(storage: context.storage)
         location.onChange = { [weak self] in self?.check(force: true) }
-        location.request()
-        Notifier.requestAuthorization()
         monitor.onChange = { [weak self] in self?.check() }
         monitor.start()
         // 不做定时轮询：读取 Wi‑Fi 名称在系统看来就是“使用定位”。
@@ -175,6 +173,8 @@ final class WiFiModule: Module {
     }
 
     // MARK: - 设置与自动化
+
+    func permissions() -> [PermissionItem] { [Permissions.locationItem] }
 
     func settingsPanes() -> [SettingsPane] {
         [SettingsPane(id: "wifi", title: "Wi‑Fi 预设", subtitle: "按分组管理常用网络，在菜单里点一下即可切换。", icon: "wifi", tint: .blue) { [store, weak self] in

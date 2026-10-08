@@ -95,32 +95,29 @@ enum WiFiService {
         }.value
     }
 
-    /// 读取系统为这个网络保存的凭据。
-    /// - 个人网络：系统钥匙串里的 “AirPort network password”，读取时系统会要求管理员授权。
-    /// - 企业网络：登录钥匙串里的 802.1X 凭据，读取时系统会询问是否允许 QuickUse 访问。
+    /// 读取系统为这个网络保存的凭据。由 QuickUse 进程自己读取，系统弹窗询问的对象是 QuickUse，
+    /// 所以即使选了“始终允许”，也只有 QuickUse 能读这一条，不会对其他程序放行。
+    /// - 个人网络：系统钥匙串里 service 为 “AirPort” 的条目，读取时需要管理员授权。
+    /// - 企业网络：登录钥匙串里的 802.1X 凭据。
     private static func systemCredential(ssid: String, enterprise: Bool) -> Credential? {
+        var query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecReturnAttributes as String: true,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
         if enterprise {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: "com.apple.network.eap.user.item.wlan.ssid.\(ssid)",
-                kSecReturnAttributes as String: true,
-                kSecReturnData as String: true,
-                kSecMatchLimit as String: kSecMatchLimitOne,
-            ]
-            var result: AnyObject?
-            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-                  let item = result as? [String: Any],
-                  let data = item[kSecValueData as String] as? Data,
-                  let password = String(data: data, encoding: .utf8) else { return nil }
-            return Credential(username: item[kSecAttrAccount as String] as? String, password: password)
+            query[kSecAttrService as String] = "com.apple.network.eap.user.item.wlan.ssid.\(ssid)"
+        } else {
+            query[kSecAttrService as String] = "AirPort"
+            query[kSecAttrAccount as String] = ssid
         }
-        let result = Shell.run("/usr/bin/security", [
-            "find-generic-password", "-D", "AirPort network password", "-a", ssid, "-w",
-            "/Library/Keychains/System.keychain",
-        ])
-        let password = result.output.trimmingCharacters(in: .newlines)
-        guard result.status == 0, !password.isEmpty else { return nil }
-        return Credential(username: nil, password: password)
+        var result: AnyObject?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let item = result as? [String: Any],
+              let data = item[kSecValueData as String] as? Data,
+              let password = String(data: data, encoding: .utf8), !password.isEmpty else { return nil }
+        return Credential(username: enterprise ? item[kSecAttrAccount as String] as? String : nil, password: password)
     }
 
     private static func describe(_ error: Error, enterprise: Bool) -> String {

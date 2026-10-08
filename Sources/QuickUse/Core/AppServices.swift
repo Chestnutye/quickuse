@@ -13,7 +13,20 @@ final class AppServices {
 
     var triggers: [TriggerDefinition] { modules.flatMap { $0.automationTriggers() } }
     var actions: [ActionDefinition] { modules.flatMap { $0.automationActions() } }
-    var settingsPanes: [SettingsPane] { modules.flatMap { $0.settingsPanes() } + [GeneralSettings.pane] }
+    var settingsPanes: [SettingsPane] {
+        modules.flatMap { $0.settingsPanes() } + [permissionsPane, GeneralSettings.pane]
+    }
+
+    /// 所有模块声明的权限，加上通用的通知和登录项。
+    private(set) lazy var permissions = PermissionsModel(
+        items: modules.flatMap { $0.permissions() } + [Permissions.notificationsItem, Permissions.loginItem])
+
+    private var permissionsPane: SettingsPane {
+        SettingsPane(id: "permissions", title: "权限", subtitle: "QuickUse 需要的系统权限。点按钮会弹出授权框，或直接跳到系统设置对应的位置。",
+                     icon: "hand.raised.fill", tint: .orange) { [permissions] in
+            PermissionsView(model: permissions)
+        }
+    }
 
     func trigger(_ id: String) -> TriggerDefinition? { triggers.first { $0.id == id } }
     func action(_ id: String) -> ActionDefinition? { actions.first { $0.id == id } }
