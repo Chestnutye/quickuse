@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -28,6 +29,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuild()
         // 开发用：open QuickUse.app --args --settings 启动后直接打开设置窗口。
         if CommandLine.arguments.contains("--settings") { services.openSettings() }
+        // 安装脚本用：open QuickUse.app --args --enable-login-item 注册为登录时启动。
+        if CommandLine.arguments.contains("--enable-login-item") {
+            do { try SMAppService.mainApp.register() } catch { NSLog("[QuickUse] 注册登录项失败：%@", "\(error)") }
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

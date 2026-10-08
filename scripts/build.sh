@@ -1,7 +1,7 @@
 #!/bin/zsh
 # 编译并打包 QuickUse.app 到 build/。
 # 用法：scripts/build.sh            只打包
-#      scripts/build.sh --install  打包后复制到 ~/Applications 并重新启动
+#      scripts/build.sh --install  打包后安装到 /Applications，设为登录时启动并重新启动
 set -euo pipefail
 cd "${0:A:h}/.."
 
@@ -24,9 +24,8 @@ echo "已生成 $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
   pkill -x QuickUse 2>/dev/null || true
-  mkdir -p ~/Applications
-  rm -rf ~/Applications/QuickUse.app
-  cp -R "$APP" ~/Applications/
-  open ~/Applications/QuickUse.app
-  echo "已安装到 ~/Applications/QuickUse.app 并启动"
+  rm -rf /Applications/QuickUse.app
+  cp -R "$APP" /Applications/
+  open /Applications/QuickUse.app --args --enable-login-item
+  echo "已安装到 /Applications/QuickUse.app，已设为登录时启动"
 fi

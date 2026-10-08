@@ -36,7 +36,7 @@
 ```sh
 git clone https://github.com/Chestnutye/quickuse.git
 cd quickuse
-scripts/build.sh --install   # 编译并安装到 ~/Applications，然后启动
+scripts/build.sh --install   # 编译并安装到 /Applications，设为登录时启动
 ```
 
 只想编译不安装：`scripts/build.sh`，产物在 `build/QuickUse.app`。
