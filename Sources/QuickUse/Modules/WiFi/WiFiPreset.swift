@@ -32,6 +32,8 @@ struct WiFiPreset: Codable, Identifiable, Hashable {
 
     static let keychainService = "QuickUse.WiFi"
 
+    var hasPassword: Bool { Keychain.exists(service: Self.keychainService, account: id.uuidString) }
+
     var password: String? {
         get { Keychain.get(service: Self.keychainService, account: id.uuidString) }
         nonmutating set {

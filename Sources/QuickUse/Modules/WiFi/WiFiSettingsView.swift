@@ -18,6 +18,8 @@ struct WiFiSettingsView: View {
                 Section(group) {
                     ForEach(store.presets.filter { $0.group == group }) { preset in
                         PresetRow(preset: preset,
+                                  needsAuthorization: preset.security == .system && !preset.hasPassword,
+                                  onAuthorize: { authorize(preset) },
                                   onEdit: { isNew = false; editing = preset },
                                   onConnect: { connect(preset) },
                                   onDelete: { store.delete(preset) },
@@ -42,6 +44,18 @@ struct WiFiSettingsView: View {
         }
     }
 
+    /// 为“使用系统已保存的密码”的预设补做授权：读取系统密码并缓存。
+    private func authorize(_ preset: WiFiPreset) {
+        Task {
+            guard let credential = await WiFiService.savedCredential(ssid: preset.ssid) else { return }
+            preset.password = credential.password
+            var p = preset
+            p.username = credential.username
+            store.upsert(p)
+            store.objectWillChange.send()
+        }
+    }
+
     /// 在同组内上下移动。
     private func move(_ preset: WiFiPreset, by offset: Int) {
         let sameGroup = store.presets.indices.filter { store.presets[$0].group == preset.group }
@@ -53,6 +67,8 @@ struct WiFiSettingsView: View {
 
 private struct PresetRow: View {
     let preset: WiFiPreset
+    let needsAuthorization: Bool
+    let onAuthorize: () -> Void
     let onEdit: () -> Void
     let onConnect: () -> Void
     let onDelete: () -> Void
@@ -67,6 +83,10 @@ private struct PresetRow: View {
                 Text(subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if needsAuthorization {
+                Button("授权…", action: onAuthorize).controlSize(.small)
+                    .help("读取系统为这个网络保存的密码并缓存，之后连接不再询问")
+            }
             Button("连接", action: onConnect).controlSize(.small)
             Menu {
                 Button("编辑…", action: onEdit)
@@ -104,6 +124,10 @@ private struct PresetEditor: View {
     @State private var search = ""
     @State private var password = ""
     @State private var username = ""
+    @State private var originalSSID = ""
+    @State private var authorizing = false
+    /// 读取系统密码被拒绝时，暂存待保存的预设，让用户选择“仍然保存”或“重试”。
+    @State private var pendingWithoutPassword: WiFiPreset?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -173,9 +197,19 @@ private struct PresetEditor: View {
             .formStyle(.grouped)
             Divider()
             HStack {
+                if authorizing {
+                    ProgressView().controlSize(.small)
+                    Text("请在系统弹窗中授权读取这个网络的密码…").font(.callout).foregroundStyle(.secondary)
+                } else if let pending = pendingWithoutPassword {
+                    Text("没有获得授权。仍然保存的话，第一次连接时会再询问。")
+                        .font(.callout).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("仍然保存") { onSave(pending, nil) }
+                }
                 Spacer()
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
-                Button(isNew ? "添加" : "保存", action: save)
+                Button(pendingWithoutPassword != nil ? "重试" : isNew ? "添加" : "保存", action: save)
+                    .disabled(authorizing)
                     .keyboardShortcut(.defaultAction)
                     .disabled(preset.ssid.trimmingCharacters(in: .whitespaces).isEmpty
                               || preset.group.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -185,6 +219,7 @@ private struct PresetEditor: View {
         .frame(width: 480, height: 560)
         .task {
             if preset.security != .system { source = .manual }
+            originalSSID = preset.ssid
             username = preset.username ?? ""
             savedNetworks = await WiFiService.savedNetworks()
             loading = false
@@ -206,6 +241,25 @@ private struct PresetEditor: View {
         p.ssid = p.ssid.trimmingCharacters(in: .whitespaces)
         p.group = p.group.trimmingCharacters(in: .whitespaces)
         if p.name.trimmingCharacters(in: .whitespaces).isEmpty { p.name = p.ssid }
+        if p.security == .system {
+            // 保存时就向系统要授权、读出密码并缓存，之后连接不再弹窗。
+            // 编辑已有预设且网络没变、已经缓存过密码时不再询问。
+            if !isNew && p.ssid == originalSSID && p.hasPassword { onSave(p, nil); return }
+            authorizing = true
+            pendingWithoutPassword = nil
+            Task {
+                let credential = await WiFiService.savedCredential(ssid: p.ssid)
+                authorizing = false
+                if let credential {
+                    p.username = credential.username
+                    onSave(p, credential.password)
+                } else {
+                    p.password = nil
+                    pendingWithoutPassword = p
+                }
+            }
+            return
+        }
         p.username = p.security == .enterprise ? username : nil
         let usesPassword = p.security == .personal || p.security == .enterprise
         if !usesPassword { p.password = nil }

@@ -95,6 +95,14 @@ enum WiFiService {
         }.value
     }
 
+    /// 添加预设时调用：不知道是个人还是企业网络，两处都查一下（不存在的条目不会弹窗）。
+    /// 会触发系统的钥匙串授权弹窗，在后台线程执行。
+    static func savedCredential(ssid: String) async -> Credential? {
+        await Task.detached {
+            systemCredential(ssid: ssid, enterprise: true) ?? systemCredential(ssid: ssid, enterprise: false)
+        }.value
+    }
+
     /// 读取系统为这个网络保存的凭据。由 QuickUse 进程自己读取，系统弹窗询问的对象是 QuickUse，
     /// 所以即使选了“始终允许”，也只有 QuickUse 能读这一条，不会对其他程序放行。
     /// - 个人网络：系统钥匙串里 service 为 “AirPort” 的条目，读取时需要管理员授权。

@@ -30,6 +30,13 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
+    /// 只检查条目是否存在，不读取内容，因此不会触发钥匙串授权弹窗。
+    static func exists(service: String, account: String) -> Bool {
+        var query = baseQuery(service: service, account: account)
+        query[kSecReturnAttributes as String] = true
+        return SecItemCopyMatching(query as CFDictionary, nil) == errSecSuccess
+    }
+
     static func delete(service: String, account: String) {
         SecItemDelete(baseQuery(service: service, account: account) as CFDictionary)
     }
