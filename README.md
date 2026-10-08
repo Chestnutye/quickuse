@@ -9,6 +9,7 @@
 ![macOS](https://img.shields.io/badge/macOS-26%2B-black?logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-F05138?logo=swift&logoColor=white)
 ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI%20%2B%20AppKit-0A84FF)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 </div>
 
@@ -130,3 +131,7 @@ final class CaffeineModule: Module {
 ```sh
 swift scripts/make-icon.swift
 ```
+
+## 许可证
+
+[MIT](LICENSE) © 2026 Chestnutye
