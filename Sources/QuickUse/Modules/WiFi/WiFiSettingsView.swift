@@ -19,7 +19,7 @@ struct WiFiSettingsView: View {
                 Section(group) {
                     ForEach(store.presets.filter { $0.group == group }) { preset in
                         PresetRow(preset: preset,
-                                  needsAuthorization: preset.security == .system && !preset.hasPassword,
+                                  needsAuthorization: preset.security == .system && !store.hasPassword(preset),
                                   onAuthorize: { authorize(preset) },
                                   onEdit: { isNew = false; editorNote = nil; editing = preset },
                                   onConnect: { connect(preset) },
@@ -38,8 +38,9 @@ struct WiFiSettingsView: View {
         }
         .formStyle(.grouped)
         .sheet(item: $editing) { preset in
-            PresetEditor(preset: preset, isNew: isNew, groups: store.groups, initialNote: editorNote) { saved, password in
-                if let password { saved.password = password }
+            PresetEditor(preset: preset, isNew: isNew, hasPassword: store.hasPassword(preset),
+                         groups: store.groups, initialNote: editorNote) { saved, password in
+                if let password { store.setPassword(password, for: saved) }
                 store.upsert(saved)
                 editing = nil
             } onCancel: { editing = nil }
@@ -52,8 +53,7 @@ struct WiFiSettingsView: View {
         Task {
             switch await WiFiService.lookupSaved(ssid: preset.ssid) {
             case .personal(let credential):
-                preset.password = credential.password
-                store.objectWillChange.send()
+                store.setPassword(credential.password, for: preset)
             case .enterprise(let username):
                 var p = preset
                 p.security = .enterprise
@@ -125,8 +125,11 @@ private struct PresetEditor: View {
 
     @State var preset: WiFiPreset
     let isNew: Bool
+    /// 编辑的预设在钥匙串里是否已有缓存的密码。
+    let hasPassword: Bool
     let groups: [String]
     var initialNote: String?
+    /// 第二个参数是要缓存的密码：nil 表示不改动，空字符串表示删除。
     let onSave: (WiFiPreset, String?) -> Void
     let onCancel: () -> Void
 
@@ -224,7 +227,8 @@ private struct PresetEditor: View {
                     Text("没有获得授权。仍然保存的话，第一次连接时会再询问。")
                         .font(.callout).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("仍然保存") { onSave(pending, nil) }
+                    // 网络可能换了，旧网络缓存的密码不能再用，一并删除。
+                    Button("仍然保存") { onSave(pending, "") }
                 }
                 Spacer()
                 Button("取消", action: onCancel).keyboardShortcut(.cancelAction)
@@ -232,7 +236,7 @@ private struct PresetEditor: View {
                     .disabled(authorizing)
                     .keyboardShortcut(.defaultAction)
                     .disabled(preset.ssid.trimmingCharacters(in: .whitespaces).isEmpty
-                              || (source == .manual && preset.security == .enterprise && password.isEmpty && !preset.hasPassword)
+                              || (source == .manual && preset.security == .enterprise && password.isEmpty && !hasPassword)
                               || preset.group.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             .padding(12)
@@ -266,7 +270,7 @@ private struct PresetEditor: View {
         if p.security == .system {
             // 保存时就向系统要授权、读出密码并缓存，之后连接不再弹窗。
             // 编辑已有预设且网络没变、已经缓存过密码时不再询问。
-            if !isNew && p.ssid == originalSSID && p.hasPassword { onSave(p, nil); return }
+            if !isNew && p.ssid == originalSSID && hasPassword { onSave(p, nil); return }
             authorizing = true
             pendingWithoutPassword = nil
             Task {
@@ -282,7 +286,6 @@ private struct PresetEditor: View {
                     source = .manual
                     note = Self.enterpriseNote(p.ssid)
                 case .unavailable:
-                    p.password = nil
                     pendingWithoutPassword = p
                 }
             }
@@ -290,7 +293,6 @@ private struct PresetEditor: View {
         }
         p.username = p.security == .enterprise ? username : nil
         let usesPassword = p.security == .personal || p.security == .enterprise
-        if !usesPassword { p.password = nil }
-        onSave(p, usesPassword && !password.isEmpty ? password : nil)
+        onSave(p, !usesPassword ? "" : password.isEmpty ? nil : password)
     }
 }

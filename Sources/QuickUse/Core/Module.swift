@@ -56,8 +56,14 @@ final class ModuleContext {
     func openSettings(pane: String? = nil) { AppServices.shared.openSettings(pane: pane) }
 
     /// 弹出一个提示框。
-    func alert(_ title: String, _ message: String = "") {
-        NSApp.activate(ignoringOtherApps: true)
+    func alert(_ title: String, _ message: String = "") { NSAlert.show(title, message) }
+}
+
+extension NSAlert {
+    /// 把 App 切到前台并弹出一个只有“好”按钮的提示框。
+    @MainActor
+    static func show(_ title: String, _ message: String = "") {
+        NSApp.activate()
         let a = NSAlert()
         a.messageText = title
         a.informativeText = message

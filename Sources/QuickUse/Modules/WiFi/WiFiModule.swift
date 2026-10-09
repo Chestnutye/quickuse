@@ -14,7 +14,7 @@ final class WiFiModule: Module {
 
     private var context: ModuleContext!
     private(set) var store: WiFiPresetStore!
-    private let location = LocationPermission()
+    private let location = LocationAuthorization.shared
     private let monitor = WiFiEventMonitor()
     private let pathMonitor = NWPathMonitor(requiredInterfaceType: .wifi)
     private var settleTimer: Timer?
@@ -34,7 +34,7 @@ final class WiFiModule: Module {
     func start(context: ModuleContext) {
         self.context = context
         store = WiFiPresetStore(storage: context.storage)
-        location.onChange = { [weak self] in self?.check(force: true) }
+        location.observe { [weak self] in self?.check(force: true) }
         monitor.onChange = { [weak self] in self?.check() }
         monitor.start()
         // 不做定时轮询：读取 Wi‑Fi 名称在系统看来就是“使用定位”。
@@ -56,9 +56,12 @@ final class WiFiModule: Module {
         currentSSID = ssid
         context.refreshMenu()
         settleTimer?.invalidate()
-        settleTimer = Timer.scheduledTimer(withTimeInterval: settleSeconds, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: settleSeconds, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.settle() }
         }
+        // 加到 .common 模式，菜单展开期间也会照常触发。
+        RunLoop.main.add(timer, forMode: .common)
+        settleTimer = timer
     }
 
     private func settle() {
@@ -74,11 +77,14 @@ final class WiFiModule: Module {
 
     // MARK: - 连接
 
-    func connect(_ preset: WiFiPreset) {
-        guard connectingID == nil else { return }
+    /// 连接到预设，连接结束（成功或失败）后才返回。`notify` 为 false 时不发 Wi‑Fi 通知，
+    /// 由调用方（例如自动化）自己汇报结果。
+    @discardableResult
+    func connect(_ preset: WiFiPreset, notify: Bool = true) async -> ActionOutcome {
+        guard connectingID == nil else { return .failed("正在连接另一个网络，没有切换到 \(preset.displayName)") }
         if preset.ssid == currentSSID {
-            Notifier.post(.wifi, title: "已经连接在 \(preset.displayName)", body: preset.ssid)
-            return
+            if notify { Notifier.post(.wifi, title: "已经连接在 \(preset.displayName)", body: preset.ssid) }
+            return .skipped("已经连接在 \(preset.displayName)")
         }
         connectingID = preset.id
         context.refreshMenu()
@@ -86,25 +92,28 @@ final class WiFiModule: Module {
         // “使用系统已保存的密码”的预设也可能已缓存了从系统钥匙串读到的凭据。
         let password: String? = preset.security == .open ? nil : preset.password
         let username = preset.security == .enterprise || preset.security == .system ? preset.username : nil
-        Task { @MainActor in
-            do {
-                if let learned = try await WiFiService.connect(ssid: preset.ssid, security: preset.security,
-                                                               username: username, password: password) {
-                    preset.password = learned.password
-                    if let u = learned.username, var p = store.presets.first(where: { $0.id == preset.id }) {
-                        p.username = u
-                        store.upsert(p)
-                    }
+        let outcome: ActionOutcome
+        do {
+            if let learned = try await WiFiService.connect(ssid: preset.ssid, security: preset.security,
+                                                           username: username, password: password) {
+                store.setPassword(learned.password, for: preset)
+                if let u = learned.username, var p = store.presets.first(where: { $0.id == preset.id }) {
+                    p.username = u
+                    store.upsert(p)
                 }
-                Notifier.post(.wifi, title: "已连接到 \(preset.displayName)", body: preset.ssid)
-            } catch let error as WiFiService.ConnectError {
-                Notifier.post(.wifi, title: error.title, body: error.detail, isError: true)
-            } catch {
-                Notifier.post(.wifi, title: "连接「\(preset.ssid)」失败", body: error.localizedDescription, isError: true)
             }
-            connectingID = nil
-            check(force: true)
+            if notify { Notifier.post(.wifi, title: "已连接到 \(preset.displayName)", body: preset.ssid) }
+            outcome = .done("已连接到 \(preset.displayName)")
+        } catch let error as WiFiService.ConnectError {
+            if notify { Notifier.post(.wifi, title: error.title, body: error.detail, isError: true) }
+            outcome = .failed("\(error.title)：\(error.detail)")
+        } catch {
+            if notify { Notifier.post(.wifi, title: "连接「\(preset.ssid)」失败", body: error.localizedDescription, isError: true) }
+            outcome = .failed("连接「\(preset.ssid)」失败：\(error.localizedDescription)")
         }
+        connectingID = nil
+        check(force: true)
+        return outcome
     }
 
     // MARK: - 菜单
@@ -129,9 +138,8 @@ final class WiFiModule: Module {
 
     private func statusItem() -> NSMenuItem {
         if !location.isAuthorized {
-            let item = ActionMenuItem("允许定位权限以读取 Wi‑Fi 名称…", image: "location.slash") { [weak self] in
-                guard let self else { return }
-                location.isUndetermined ? location.request() : location.openSystemSettings()
+            let item = ActionMenuItem("允许定位权限以读取 Wi‑Fi 名称…", image: "location.slash") { [location] in
+                if location.isUndetermined { Task { await location.request() } } else { location.openSystemSettings() }
             }
             return item
         }
@@ -152,7 +160,7 @@ final class WiFiModule: Module {
     }
 
     private func presetItem(_ preset: WiFiPreset) -> NSMenuItem {
-        let item = ActionMenuItem(preset.name) { [weak self] in self?.connect(preset) }
+        let item = ActionMenuItem(preset.name) { [weak self] in Task { await self?.connect(preset) } }
         let font = NSFont.menuFont(ofSize: 0)
         let title = NSMutableAttributedString(string: preset.name, attributes: [.font: font])
         title.append(NSAttributedString(string: "  \(preset.ssid)", attributes: [
@@ -178,7 +186,7 @@ final class WiFiModule: Module {
 
     func settingsPanes() -> [SettingsPane] {
         [SettingsPane(id: "wifi", title: "Wi‑Fi 预设", subtitle: "按分组管理常用网络，在菜单里点一下即可切换。", icon: "wifi", tint: .blue) { [store, weak self] in
-            WiFiSettingsView(store: store!) { self?.connect($0) }
+            WiFiSettingsView(store: store!) { preset in Task { await self?.connect(preset) } }
         }]
     }
 
@@ -220,9 +228,8 @@ final class WiFiModule: Module {
                     guard let self, let p = store.presets.first(where: { $0.id.uuidString == params["preset"] }) else {
                         return .failed("预设不存在")
                     }
-                    if p.ssid == currentSSID { return .skipped("已经连接在 \(p.displayName)") }
-                    connect(p)
-                    return .done("开始切换到 \(p.displayName)")
+                    // 等连接结束再返回，后面的动作（例如打开需要联网的 App）才会在连上之后执行。
+                    return await connect(p, notify: false)
                 }),
         ]
     }

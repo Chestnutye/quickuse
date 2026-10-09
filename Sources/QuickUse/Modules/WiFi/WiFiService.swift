@@ -1,5 +1,3 @@
-import AppKit
-import CoreLocation
 import CoreWLAN
 import Security
 import Foundation
@@ -165,37 +163,6 @@ enum WiFiService {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
-}
-
-/// 读取 Wi‑Fi 名称需要定位权限。
-@MainActor
-final class LocationPermission: NSObject, CLLocationManagerDelegate {
-    private let manager = CLLocationManager()
-    var onChange: (() -> Void)?
-
-    override init() {
-        super.init()
-        manager.delegate = self
-    }
-
-    var isAuthorized: Bool {
-        let s = manager.authorizationStatus
-        return s == .authorizedAlways || s == .authorized
-    }
-
-    var isUndetermined: Bool { manager.authorizationStatus == .notDetermined }
-
-    func request() {
-        if isUndetermined { manager.requestWhenInUseAuthorization() }
-    }
-
-    func openSystemSettings() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices")!)
-    }
-
-    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-        Task { @MainActor in self.onChange?() }
-    }
 }
 
 /// 监听系统 Wi‑Fi 变化事件（回调在后台线程）。

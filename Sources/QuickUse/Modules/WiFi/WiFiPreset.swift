@@ -32,28 +32,38 @@ struct WiFiPreset: Codable, Identifiable, Hashable {
 
     static let keychainService = "QuickUse.WiFi"
 
-    var hasPassword: Bool { Keychain.exists(service: Self.keychainService, account: id.uuidString) }
-
-    var password: String? {
-        get { Keychain.get(service: Self.keychainService, account: id.uuidString) }
-        nonmutating set {
-            if let newValue, !newValue.isEmpty {
-                Keychain.set(newValue, service: Self.keychainService, account: id.uuidString)
-            } else {
-                Keychain.delete(service: Self.keychainService, account: id.uuidString)
-            }
-        }
-    }
+    /// 钥匙串里缓存的密码。写入请用 `WiFiPresetStore.setPassword`，以便同步 `hasPassword` 的缓存。
+    var password: String? { Keychain.get(service: Self.keychainService, account: id.uuidString) }
 }
 
 @MainActor
 final class WiFiPresetStore: ObservableObject {
     @Published var presets: [WiFiPreset] { didSet { storage.save(presets, to: "presets") } }
+    /// 钥匙串里有缓存密码的预设。界面渲染时查这里，不用每次都访问钥匙串。
+    @Published private(set) var withPassword: Set<UUID> = []
     private let storage: ModuleStorage
 
     init(storage: ModuleStorage) {
         self.storage = storage
         presets = storage.load([WiFiPreset].self, from: "presets") ?? []
+        withPassword = Set(presets.map(\.id).filter {
+            Keychain.exists(service: WiFiPreset.keychainService, account: $0.uuidString)
+        })
+    }
+
+    func hasPassword(_ preset: WiFiPreset) -> Bool { withPassword.contains(preset.id) }
+
+    /// 写入缓存的密码；nil 或空字符串表示删除。
+    func setPassword(_ password: String?, for preset: WiFiPreset) {
+        let account = preset.id.uuidString
+        if let password, !password.isEmpty {
+            if Keychain.set(password, service: WiFiPreset.keychainService, account: account) {
+                withPassword.insert(preset.id)
+            }
+        } else {
+            Keychain.delete(service: WiFiPreset.keychainService, account: account)
+            withPassword.remove(preset.id)
+        }
     }
 
     /// 按首次出现的顺序列出分组。
@@ -67,7 +77,7 @@ final class WiFiPresetStore: ObservableObject {
     }
 
     func delete(_ preset: WiFiPreset) {
-        preset.password = nil
+        setPassword(nil, for: preset)
         presets.removeAll { $0.id == preset.id }
     }
 

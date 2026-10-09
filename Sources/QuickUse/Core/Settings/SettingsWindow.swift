@@ -50,7 +50,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
         // 菜单栏 App 默认不在程序坞显示；设置窗口打开期间临时显示，便于切换窗口。
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
     }
 

@@ -14,7 +14,7 @@
 </div>
 
 <p align="center">
-  <img src="docs/settings.png" width="720" alt="设置窗口">
+  <img src="docs/settings.png" width="720" alt="设置窗口：权限页">
 </p>
 
 ## 功能
@@ -39,7 +39,7 @@ cd quickuse
 scripts/build.sh --install   # 编译并安装到 /Applications，设为登录时启动
 ```
 
-只想编译不安装：`scripts/build.sh`，产物在 `build/QuickUse.app`。
+只想编译不安装：`scripts/build.sh`，产物在 `build/QuickUse.app`。运行测试：`swift test`（会在钥匙串和 Application Support 里创建临时条目，测试结束后自动删除）。
 
 ### 首次运行需要的权限
 
@@ -92,6 +92,7 @@ Sources/QuickUse/
     ├── WiFi/
     ├── MenuBar/
     └── AppLauncher/
+Tests/QuickUseTests/       存储、钥匙串、权限检查等逻辑的测试
 Resources/                 Info.plist、StatusIcon.svg、AppIcon.icns
 scripts/
 ├── build.sh               编译打包
@@ -132,7 +133,7 @@ final class CaffeineModule: Module {
 
 | 能力 | 说明 |
 | --- | --- |
-| `context.storage` | 模块独立的 JSON 存储，位于 `~/Library/Application Support/QuickUse/<id>/` |
+| `context.storage` | 模块独立的 JSON 存储，位于 `~/Library/Application Support/QuickUse/<id>/`。文件解析失败时会改名为 `<name>.corrupt-<时间戳>.json` 备份，不会被覆盖；给已有结构加字段请用可选类型 |
 | `Keychain` | 保存密码等敏感信息 |
 | `context.events.post(_:)` | 发出事件，自动化规则据此触发 |
 | `Notifier.post(_:title:body:)` | 发送通知（新的类别加在 `Notifier.Category`） |

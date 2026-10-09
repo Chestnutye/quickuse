@@ -11,13 +11,22 @@ enum Keychain {
         ]
     }
 
-    static func set(_ secret: String, service: String, account: String) {
+    /// 写入密码，已有条目则原地更新。返回是否成功，失败原因记在日志里。
+    @discardableResult
+    static func set(_ secret: String, service: String, account: String) -> Bool {
         let query = baseQuery(service: service, account: account)
-        SecItemDelete(query as CFDictionary)
-        var add = query
-        add[kSecValueData as String] = Data(secret.utf8)
-        add[kSecAttrLabel as String] = "QuickUse: \(account)"
-        SecItemAdd(add as CFDictionary, nil)
+        let data = Data(secret.utf8)
+        var status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var add = query
+            add[kSecValueData as String] = data
+            add[kSecAttrLabel as String] = "QuickUse: \(account)"
+            status = SecItemAdd(add as CFDictionary, nil)
+        }
+        if status != errSecSuccess {
+            NSLog("[QuickUse] 写入钥匙串失败（%@ / %@）：%d", service, account, status)
+        }
+        return status == errSecSuccess
     }
 
     static func get(service: String, account: String) -> String? {

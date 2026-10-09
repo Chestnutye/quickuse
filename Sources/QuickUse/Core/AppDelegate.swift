@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var modules: [Module] = []
     /// 所有模块 start 完成前忽略刷新请求，避免访问尚未初始化的模块。
     private var ready = false
+    /// `menuWillOpen` 期间模块请求的刷新先忽略，结束后统一重建一次。
+    private var updatingMenu = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -33,8 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             rebuild()
             if !services.permissions.missingRequired.isEmpty { services.openSettings(pane: "permissions") }
         }
-        // 开发用：open QuickUse.app --args --settings 启动后直接打开设置窗口。
-        if CommandLine.arguments.contains("--settings") { services.openSettings() }
+        // 开发用：open QuickUse.app --args --settings [页面id] 启动后直接打开设置窗口（例如截图）。
+        let args = CommandLine.arguments
+        if let i = args.firstIndex(of: "--settings") {
+            let pane = args.indices.contains(i + 1) && !args[i + 1].hasPrefix("--") ? args[i + 1] : nil
+            services.openSettings(pane: pane)
+        }
         // 安装脚本用：open QuickUse.app --args --enable-login-item 注册为登录时启动。
         if CommandLine.arguments.contains("--enable-login-item") {
             do { try SMAppService.mainApp.register() } catch { NSLog("[QuickUse] 注册登录项失败：%@", "\(error)") }
@@ -42,13 +48,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        updatingMenu = true
         modules.forEach { $0.menuWillOpen() }
+        updatingMenu = false
         rebuild()
-        Task { await AppServices.shared.permissions.refresh(); rebuild() }
+        Task {
+            let permissions = AppServices.shared.permissions
+            let missing = permissions.missingRequired.count
+            await permissions.refresh()
+            if permissions.missingRequired.count != missing { rebuild() }
+        }
     }
 
     private func rebuild() {
-        guard ready else { return }
+        guard ready, !updatingMenu else { return }
         menu.removeAllItems()
         let missing = AppServices.shared.permissions.missingRequired.count
         if missing > 0 {

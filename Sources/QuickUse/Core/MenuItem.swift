@@ -18,12 +18,7 @@ final class ActionMenuItem: NSMenuItem {
 
 extension NSMenuItem {
     /// 灰色的小节标题。
-    static func header(_ title: String) -> NSMenuItem {
-        if #available(macOS 14.0, *) { return NSMenuItem.sectionHeader(title: title) }
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        return item
-    }
+    static func header(_ title: String) -> NSMenuItem { .sectionHeader(title: title) }
 
     /// 不可点击的说明文字。
     static func note(_ title: String) -> NSMenuItem {

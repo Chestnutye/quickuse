@@ -48,10 +48,6 @@ enum Notifier {
         UserDefaults.standard.object(forKey: category.rawValue) as? Bool ?? true
     }
 
-    static func requestAuthorization() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
-    }
-
     static func post(_ category: Category, title: String, body: String = "", isError: Bool = false) {
         guard isEnabled(category) else { return }
         var batch = batches[category] ?? Batch()
@@ -59,9 +55,12 @@ enum Notifier {
         batch.timer?.invalidate()
         let deadline = batch.startedAt.addingTimeInterval(maxWait).timeIntervalSinceNow
         let delay = max(0, min(quietInterval, deadline))
-        batch.timer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+        let timer = Timer(timeInterval: delay, repeats: false) { _ in
             Task { @MainActor in flush(category) }
         }
+        // 加到 .common 模式，菜单展开期间也会照常触发。
+        RunLoop.main.add(timer, forMode: .common)
+        batch.timer = timer
         batches[category] = batch
     }
 
@@ -85,21 +84,15 @@ enum Notifier {
             let center = UNUserNotificationCenter.current()
             let status = await center.notificationSettings().authorizationStatus
             let allowed = status == .authorized || status == .provisional
-            do {
-                if allowed {
-                    let content = UNMutableNotificationContent()
-                    content.title = item.title
-                    content.body = item.body
-                    content.threadIdentifier = category.rawValue
-                    if item.isError { content.sound = .default }
-                    try? await center.add(UNNotificationRequest(identifier: category.rawValue, content: content, trigger: nil))
-                } else if item.isError {
-                    NSApp.activate(ignoringOtherApps: true)
-                    let a = NSAlert()
-                    a.messageText = item.title
-                    a.informativeText = item.body
-                    a.runModal()
-                }
+            if allowed {
+                let content = UNMutableNotificationContent()
+                content.title = item.title
+                content.body = item.body
+                content.threadIdentifier = category.rawValue
+                if item.isError { content.sound = .default }
+                try? await center.add(UNNotificationRequest(identifier: category.rawValue, content: content, trigger: nil))
+            } else if item.isError {
+                NSAlert.show(item.title, item.body)
             }
         }
     }

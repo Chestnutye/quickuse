@@ -11,8 +11,15 @@ final class PermissionsModel: ObservableObject {
 
     func refresh() async {
         var result: [String: PermissionStatus] = [:]
-        for item in items { result[item.id] = await item.check() }
-        statuses = result
+        for item in items {
+            var status = await item.check()
+            if status == nil, statuses[item.id] == nil, let prepare = item.prepare {
+                await prepare()
+                status = await item.check()
+            }
+            result[item.id] = status ?? statuses[item.id] ?? .notDetermined
+        }
+        if result != statuses { statuses = result }
     }
 
     var missingRequired: [PermissionItem] {

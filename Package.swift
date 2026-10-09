@@ -14,5 +14,10 @@ let package = Package(
                 .linkedFramework("Security"),
             ]
         ),
+        .testTarget(
+            name: "QuickUseTests",
+            dependencies: ["QuickUse"],
+            path: "Tests/QuickUseTests"
+        ),
     ]
 )

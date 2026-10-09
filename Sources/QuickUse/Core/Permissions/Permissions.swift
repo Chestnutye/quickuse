@@ -33,7 +33,10 @@ struct PermissionItem: Identifiable {
     let tint: Color
     /// 必需权限缺失时，启动后会自动打开权限页。
     var required = true
-    let check: @MainActor () async -> PermissionStatus
+    /// 检查当前状态。返回 nil 表示暂时无法判断（例如目标 App 没在运行），沿用上次的结果。
+    let check: @MainActor () async -> PermissionStatus?
+    /// 还不知道状态、`check` 又返回 nil 时调用一次，做判断前的准备（例如在后台启动目标 App）。
+    var prepare: (@MainActor () async -> Void)? = nil
     /// 弹出系统授权框。只在 `.notDetermined` 时调用。
     let request: @MainActor () async -> Void
     let openSettings: @MainActor () -> Void
@@ -51,47 +54,72 @@ enum SystemSettings {
     }
 }
 
+/// 定位权限（读取 Wi‑Fi 名称需要它）。全 App 共用一个 `CLLocationManager`。
+@MainActor
+final class LocationAuthorization: NSObject, CLLocationManagerDelegate {
+    static let shared = LocationAuthorization()
+
+    private let manager = CLLocationManager()
+    private var observers: [() -> Void] = []
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private override init() {
+        super.init()
+        manager.delegate = self
+    }
+
+    var isAuthorized: Bool { manager.authorizationStatus == .authorizedAlways }
+    var isUndetermined: Bool { manager.authorizationStatus == .notDetermined }
+
+    /// 授权状态变化时调用。
+    func observe(_ handler: @escaping () -> Void) { observers.append(handler) }
+
+    /// 弹出系统授权框，用户做出选择后返回；已经选过则立即返回。
+    /// 系统没有弹框（例如定位服务整体关闭）时最多等 60 秒，避免调用方一直卡住。
+    func request() async {
+        guard isUndetermined else { return }
+        await withCheckedContinuation { c in
+            waiters.append(c)
+            guard waiters.count == 1 else { return }
+            manager.requestWhenInUseAuthorization()
+            Task {
+                try? await Task.sleep(for: .seconds(60))
+                resumeWaiters()
+            }
+        }
+    }
+
+    func openSystemSettings() { SystemSettings.open(SystemSettings.locationServices) }
+
+    private func resumeWaiters() {
+        let pending = waiters
+        waiters = []
+        pending.forEach { $0.resume() }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
+            observers.forEach { $0() }
+            if !isUndetermined { resumeWaiters() }
+        }
+    }
+}
+
 /// 常用权限的检查与请求。
 @MainActor
 enum Permissions {
     // MARK: 定位
-
-    private final class LocationRequester: NSObject, CLLocationManagerDelegate {
-        let manager = CLLocationManager()
-        var continuation: CheckedContinuation<Void, Never>?
-
-        override init() {
-            super.init()
-            manager.delegate = self
-        }
-
-        func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-            guard manager.authorizationStatus != .notDetermined else { return }
-            continuation?.resume()
-            continuation = nil
-        }
-    }
-
-    private static let location = LocationRequester()
 
     static let locationItem = PermissionItem(
         id: "location", title: "定位服务",
         reason: "macOS 只允许有定位权限的 App 读取 Wi‑Fi 名称。用于显示当前网络和触发自动化，不会获取你的位置。",
         icon: "location.fill", tint: .blue,
         check: {
-            switch location.manager.authorizationStatus {
-            case .authorizedAlways: .granted
-            case .notDetermined: .notDetermined
-            default: .denied
-            }
+            let location = LocationAuthorization.shared
+            return location.isAuthorized ? .granted : location.isUndetermined ? .notDetermined : .denied
         },
-        request: {
-            await withCheckedContinuation { c in
-                location.continuation = c
-                location.manager.requestWhenInUseAuthorization()
-            }
-        },
-        openSettings: { SystemSettings.open(SystemSettings.locationServices) })
+        request: { await LocationAuthorization.shared.request() },
+        openSettings: { LocationAuthorization.shared.openSystemSettings() })
 
     // MARK: 通知
 
@@ -112,7 +140,8 @@ enum Permissions {
     // MARK: 自动化（Apple 事件）
 
     /// 检查能否向某个 App 发送 Apple 事件。`ask` 为 true 时会弹出系统授权框（阻塞，需在后台调用）。
-    nonisolated static func automationStatus(bundleID: String, ask: Bool) -> PermissionStatus {
+    /// 目标 App 没在运行时系统无法判断，返回 nil。
+    nonisolated static func automationStatus(bundleID: String, ask: Bool) -> PermissionStatus? {
         var target = AEAddressDesc()
         let created = bundleID.withCString { AECreateDesc(typeApplicationBundleID, $0, strlen($0), &target) }
         guard created == noErr else { return .notDetermined }
@@ -120,7 +149,8 @@ enum Permissions {
         switch AEDeterminePermissionToAutomateTarget(&target, typeWildCard, typeWildCard, ask) {
         case noErr: return .granted
         case OSStatus(errAEEventNotPermitted): return .denied
-        default: return .notDetermined   // 包括需要询问、目标未运行
+        case OSStatus(procNotFound): return nil
+        default: return .notDetermined   // 包括需要询问
         }
     }
 
@@ -135,10 +165,11 @@ enum Permissions {
             id: "automation.\(bundleID)", title: "控制“\(appName)”",
             reason: reason, icon: "gearshape.2.fill", tint: .purple,
             check: {
-                // 目标 App 未运行时系统无法判断，先在后台启动它。
-                if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty { await launchTarget() }
+                // 目标 App 没在运行时不去启动它（菜单每次打开都会检查），沿用上次的结果。
+                if NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty { return nil }
                 return await Task.detached { automationStatus(bundleID: bundleID, ask: false) }.value
             },
+            prepare: launchTarget,
             request: {
                 await launchTarget()
                 _ = await Task.detached { automationStatus(bundleID: bundleID, ask: true) }.value
