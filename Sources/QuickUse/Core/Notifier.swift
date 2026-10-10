@@ -15,11 +15,13 @@ enum Notifier {
     enum Category: String, CaseIterable {
         case wifi = "notify.wifi"
         case automation = "notify.automation"
+        case study = "notify.study"
 
         var title: String {
             switch self {
             case .wifi: "Wi‑Fi 切换成功或失败时通知"
             case .automation: "自动化执行时通知"
+            case .study: "学业待办同步出现变化时通知"
             }
         }
 

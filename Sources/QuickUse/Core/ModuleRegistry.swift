@@ -5,6 +5,7 @@ enum ModuleRegistry {
         [
             WiFiModule(),
             MenuBarAutoHideModule(),
+            StudyTasksModule(),
             AppLauncherModule(),
             AutomationModule(),
         ]

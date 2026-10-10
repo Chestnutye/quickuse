@@ -13,9 +13,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>0.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>zh_CN</string>
 	<key>CFBundleIconFile</key>
@@ -28,6 +28,10 @@
 	<string>macOS 需要定位权限才允许 App 读取当前 Wi‑Fi 名称，用于显示当前网络和触发自动化。QuickUse 不会获取或记录你的位置。</string>
 	<key>NSLocationUsageDescription</key>
 	<string>macOS 需要定位权限才允许 App 读取当前 Wi‑Fi 名称，用于显示当前网络和触发自动化。QuickUse 不会获取或记录你的位置。</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>QuickUse 把 Obsidian 笔记里的学业待办同步到你选定的“提醒事项”列表，并把在手机上打的勾同步回笔记。</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>QuickUse 把 Obsidian 笔记里的学业待办同步到你选定的“提醒事项”列表，并把在手机上打的勾同步回笔记。</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>QuickUse 通过“System Events”修改菜单栏自动隐藏设置。</string>
 </dict>

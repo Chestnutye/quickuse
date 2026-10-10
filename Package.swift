@@ -12,6 +12,7 @@ let package = Package(
                 .linkedFramework("CoreWLAN"),
                 .linkedFramework("CoreLocation"),
                 .linkedFramework("Security"),
+                .linkedFramework("EventKit"),
             ]
         ),
         .testTarget(
